@@ -7,7 +7,7 @@ from flask import Flask, jsonify, send_from_directory
 
 import requests
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='/static')
 
 CACHE_DIR = Path(__file__).parent / "cache"
 DATA_DIR = Path(__file__).parent / "data"
@@ -83,9 +83,8 @@ def load_packages():
         with open(data_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, IOError) as e:
-        if PRODUCTION:
-            return {}
-        raise
+        app.logger.error("Failed to load packages: %s", e)
+        return {}
 
     for registry_name, packages in data.items():
         if not isinstance(packages, list):
