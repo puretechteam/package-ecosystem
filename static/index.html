@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Package Ecosystem Visualizer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div id="error-banner" class="error-banner"></div>
+
+    <header>
+        <h1><span>Package</span> Ecosystem Visualizer</h1>
+        <p>Explore dependency graphs across npm, PyPI, and crates.io</p>
+    </header>
+
+    <div class="toolbar">
+        <div class="search-bar">
+            <input type="text" id="search-input" placeholder="Search packages..." autocomplete="off">
+        </div>
+        <div class="filter-group">
+            <label for="registry-select">Registry</label>
+            <select id="registry-select">
+                <option value="all">All</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="category-select">Category</label>
+            <select id="category-select">
+                <option value="all">All</option>
+            </select>
+        </div>
+        <div class="filter-group time-filter">
+            <label for="time-slider">Popularity</label>
+            <input type="range" id="time-slider" min="0" max="100" value="0">
+            <span id="time-label">All</span>
+        </div>
+        <button id="reset-btn">Reset Filters</button>
+    </div>
+
+    <div class="main-layout">
+        <div class="graph-container" id="graph-container">
+            <svg id="graph-svg"></svg>
+            <div class="graph-empty-state" id="graph-empty-state">
+                <div class="graph-empty-state-content">
+                    <div class="graph-empty-state-icon">&#8863;</div>
+                    <div class="graph-empty-state-text" id="graph-empty-message">No packages to display</div>
+                </div>
+            </div>
+            <div class="legend-panel" id="legend-panel">
+                <h3>Legend</h3>
+                <div class="legend-section">
+                    <div class="legend-section-title">Categories</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#e94560"></span> Framework</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#0f3460"></span> Library</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#16c79a"></span> Tool</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#f0a500"></span> Utility</div>
+                </div>
+                <div class="legend-section">
+                    <div class="legend-section-title">Registries</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#e94560"></span> npm</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#16c79a"></span> PyPI</div>
+                    <div class="legend-item"><span class="legend-dot" style="background:#f0a500"></span> crates.io</div>
+                </div>
+            </div>
+            <div class="stats-panel" id="stats-panel">
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-nodes">0</span>
+                    <span class="stat-label">Nodes</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-edges">0</span>
+                    <span class="stat-label">Edges</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-registries">0</span>
+                    <span class="stat-label">Registries</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value" id="stat-packages">0</span>
+                    <span class="stat-label">Packages</span>
+                </div>
+            </div>
+            <div class="stale-indicator" id="stale-indicator">Data may be stale</div>
+            <div class="graph-controls">
+                <button id="zoom-in" title="Zoom in">+</button>
+                <button id="zoom-out" title="Zoom out">&minus;</button>
+                <button id="zoom-reset" title="Reset view">&#x21BA;</button>
+            </div>
+        </div>
+        <div class="detail-panel" id="detail-panel">
+            <div class="detail-header">
+                <h2 id="detail-name">Select a package</h2>
+                <button id="detail-close">&times;</button>
+            </div>
+            <div class="detail-body">
+                <div class="detail-field">
+                    <span class="detail-label">Version</span>
+                    <span id="detail-version" class="badge badge-version">-</span>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Registry</span>
+                    <span id="detail-registry" class="badge badge-registry">-</span>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Category</span>
+                    <span id="detail-category" class="badge badge-category">-</span>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">License</span>
+                    <span id="detail-license" class="badge badge-license">-</span>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Statistics</span>
+                    <div class="detail-meta">
+                        <div class="detail-stat">
+                            <div>
+                                <div class="detail-stat-value" id="detail-downloads">-</div>
+                                <div class="detail-stat-label">Downloads</div>
+                            </div>
+                        </div>
+                        <div class="detail-stat">
+                            <div>
+                                <div class="detail-stat-value" id="detail-dependents">-</div>
+                                <div class="detail-stat-label">Dependents</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Maintainers</span>
+                    <span id="detail-maintainers">-</span>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Description</span>
+                    <p id="detail-description" class="detail-description">-</p>
+                </div>
+                <div class="detail-field">
+                    <span class="detail-label">Dependencies</span>
+                    <ul id="detail-dependencies"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <span id="node-count">0 nodes</span>
+        <span id="edge-count">0 edges</span>
+        <span id="registry-count">0 registries</span>
+        <span><span class="status-dot"></span> Live</span>
+    </div>
+
+    <script src="/static/js/filters.js"></script>
+    <script src="/static/js/graph.js"></script>
+    <script src="/static/js/detail.js"></script>
+</body>
+</html>
