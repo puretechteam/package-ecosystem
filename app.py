@@ -352,7 +352,7 @@ def load_packages() -> dict[str, list[dict[str, Any]]]:
     """
     data_path = DATA_DIR / "packages.json"
     try:
-        with open(data_path, "r", encoding="utf-8") as f:
+        with open(data_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         logger.error("Failed to load packages: %s", e)
@@ -395,7 +395,7 @@ def load_checksums() -> dict[str, str]:
     """
     checksum_file = DATA_DIR / "checksums.json"
     if checksum_file.exists():
-        with open(checksum_file, "r", encoding="utf-8") as f:
+        with open(checksum_file, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -452,7 +452,7 @@ def get_cached_response(cache_key: str) -> dict[str, Any] | None:
     cache_file = CACHE_DIR / f"{cache_key}.json"
     if cache_file.exists():
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
+            with open(cache_file, encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
             return None
