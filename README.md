@@ -78,7 +78,36 @@ docker-compose up
 
 > **Note:** The Makefile is the preferred build tool and provides cross-platform support for all development workflows.
 
-## Features
+## Testing
+
+### Running Tests
+
+Run the full test suite with:
+
+```
+make test
+```
+
+Or run pytest directly:
+
+```
+pytest
+```
+
+### Test Structure
+
+Tests are located in the `tests/` directory and are organized as follows:
+
+- `tests/test_app.py` — Tests for the Flask application routes and app creation
+- `tests/test_data.py` — Tests for data loading, schema validation, and checksum verification
+
+### Test Dependencies
+
+Development dependencies for testing are listed in `requirements-dev.txt` and include `pytest` and `pytest-cov`. Install them with:
+
+```
+make install-dev
+```
 
 - Force-directed graph visualization of package dependencies
 - Filter by registry, category, popularity, and search
