@@ -1,15 +1,14 @@
+import hashlib
+import json
+import logging
 import os
 import sys
-import json
-import hashlib
-import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-from flask import Flask, jsonify, send_from_directory, Response
+from typing import Any
 
 import requests
+from flask import Flask, Response, jsonify, send_from_directory
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -47,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 def _make_request_with_retry(
     url: str,
-    headers: Optional[Dict[str, str]] = None,
+    headers: dict[str, str] | None = None,
     timeout: int = 10,
     max_retries: int = 3,
 ) -> requests.Response:
@@ -65,14 +64,14 @@ def _make_request_with_retry(
     Raises:
         requests.RequestException: If all retry attempts fail.
     """
-    last_exception: Optional[Exception] = None
+    last_exception: Exception | None = None
     for attempt in range(max_retries):
         try:
             resp = requests.get(url, headers=headers, timeout=timeout)
             if resp.status_code == 429:
                 wait_time = (2 ** attempt) * 0.5
                 logger.warning("Rate limited (429) on %s, retrying in %.1fs (attempt %d/%d)", url, wait_time, attempt + 1, max_retries)
-                last_exception = Exception(f"Rate limited: 429")
+                last_exception = Exception("Rate limited: 429")
                 if attempt < max_retries - 1:
                     time.sleep(wait_time)
                     continue
@@ -345,7 +344,7 @@ def fetch_crates(package: str) -> Response:
         return jsonify({"error": "Package not found and no cached data available"}), 404
 
 
-def load_packages() -> Dict[str, List[Dict[str, Any]]]:
+def load_packages() -> dict[str, list[dict[str, Any]]]:
     """Load and validate package data from the bundled JSON file.
 
     Returns:
@@ -355,7 +354,7 @@ def load_packages() -> Dict[str, List[Dict[str, Any]]]:
     try:
         with open(data_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.error("Failed to load packages: %s", e)
         return {}
 
@@ -372,7 +371,7 @@ def load_packages() -> Dict[str, List[Dict[str, Any]]]:
     return data
 
 
-def compute_checksum(filepath: Union[str, Path]) -> str:
+def compute_checksum(filepath: str | Path) -> str:
     """Compute the SHA-256 checksum of a file.
 
     Args:
@@ -388,7 +387,7 @@ def compute_checksum(filepath: Union[str, Path]) -> str:
     return h.hexdigest()
 
 
-def load_checksums() -> Dict[str, str]:
+def load_checksums() -> dict[str, str]:
     """Load the checksums manifest from disk.
 
     Returns:
@@ -401,7 +400,7 @@ def load_checksums() -> Dict[str, str]:
     return {}
 
 
-def verify_data_integrity() -> Tuple[bool, str]:
+def verify_data_integrity() -> tuple[bool, str]:
     """Verify the integrity of the bundled data file against its checksum.
 
     Returns:
@@ -441,7 +440,7 @@ def validate_package_schema(pkg: Any) -> bool:
     return True
 
 
-def get_cached_response(cache_key: str) -> Optional[Dict[str, Any]]:
+def get_cached_response(cache_key: str) -> dict[str, Any] | None:
     """Retrieve a cached API response from disk.
 
     Args:
@@ -455,12 +454,12 @@ def get_cached_response(cache_key: str) -> Optional[Dict[str, Any]]:
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return None
     return None
 
 
-def set_cached_response(cache_key: str, data: Dict[str, Any]) -> None:
+def set_cached_response(cache_key: str, data: dict[str, Any]) -> None:
     """Persist an API response to the cache directory.
 
     Args:
@@ -471,11 +470,11 @@ def set_cached_response(cache_key: str, data: Dict[str, Any]) -> None:
     try:
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f)
-    except IOError:
+    except OSError:
         pass
 
 
-def _extract_npm_license(npm_data: Dict[str, Any]) -> str:
+def _extract_npm_license(npm_data: dict[str, Any]) -> str:
     """Extract the license string from npm registry metadata.
 
     Args:
@@ -492,7 +491,7 @@ def _extract_npm_license(npm_data: Dict[str, Any]) -> str:
     return ""
 
 
-def _extract_npm_repo(npm_data: Dict[str, Any]) -> str:
+def _extract_npm_repo(npm_data: dict[str, Any]) -> str:
     """Extract the repository URL from npm registry metadata.
 
     Args:
@@ -509,7 +508,7 @@ def _extract_npm_repo(npm_data: Dict[str, Any]) -> str:
     return ""
 
 
-def _extract_pypi_repo(info: Dict[str, Any]) -> str:
+def _extract_pypi_repo(info: dict[str, Any]) -> str:
     """Extract the repository URL from PyPI package metadata.
 
     Args:

@@ -1,13 +1,11 @@
-import os
 from pathlib import Path
 
-import pytest
 from app import (
     compute_checksum,
     load_checksums,
     load_packages,
-    verify_data_integrity,
     validate_package_schema,
+    verify_data_integrity,
 )
 
 DATA_DIR = Path(__file__).parent.parent / "data"
