@@ -1,0 +1,9 @@
+.git/
+__pycache__/
+.venv/
+dist/
+build/
+*.exe
+.env
+cache/
+.DS_Store

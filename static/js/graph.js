@@ -24,6 +24,7 @@ const categoryColors = {
     library: "#0f3460",
     tool: "#16c79a",
     utility: "#f0a500",
+    external: "#888",
 };
 
 const registryColors = {
@@ -84,12 +85,14 @@ async function fetchData() {
     } catch (err) {
         console.warn("Live data fetch failed, falling back to bundled data:", err);
         try {
-            const fallbackRes = await fetch("/api/data");
+            const fallbackRes = await fetch("/data/packages.json");
             if (fallbackRes.ok) {
-                App.data = await fallbackRes.json();
+                const bundledData = await fallbackRes.json();
+                App.data = bundledData;
                 App.dataSource = "bundled";
-                App.isStale = false;
-                if (staleIndicator) staleIndicator.classList.remove("visible");
+                App.isStale = true;
+                if (staleIndicator) staleIndicator.classList.add("visible");
+                if (errorBanner) errorBanner.classList.remove("visible");
             } else {
                 throw new Error("Fallback also failed");
             }
@@ -169,13 +172,35 @@ function buildGraph() {
     }));
 
     App.links = [];
+    const allPackageNames = new Set(
+        filteredPackages.map((p) => p.name)
+    );
+    const placeholderNodes = [];
     filteredPackages.forEach((pkg) => {
         pkg.dependencies.forEach((dep) => {
-            if (packageNames.has(dep)) {
+            if (allPackageNames.has(dep)) {
+                App.links.push({ source: pkg.name, target: dep });
+            } else {
+                if (!placeholderNodes.find((n) => n.id === dep)) {
+                    placeholderNodes.push({
+                        id: dep,
+                        version: "external",
+                        registry: "external",
+                        category: "external",
+                        downloads: 0,
+                        description: "External dependency (not in bundled data)",
+                        license: "",
+                        dependents_count: 0,
+                        maintainers: [],
+                        dependencies: [],
+                        external: true,
+                    });
+                }
                 App.links.push({ source: pkg.name, target: dep });
             }
         });
     });
+    App.nodes = App.nodes.concat(placeholderNodes);
 
     App.categories = new Set(filteredPackages.map((p) => p.category));
 
@@ -263,9 +288,12 @@ function renderGraph() {
         .attr("r", (d) => App.sizeScale(d.downloads))
         .attr("fill", (d) => categoryColors[d.category] || "#666")
         .attr("stroke", (d) => {
+            if (d.external) return "#555";
             const c = d3.color(categoryColors[d.category] || "#666");
             return c ? c.brighter(0.5).toString() : "#fff";
         })
+        .attr("stroke-dasharray", (d) => d.external ? "3,3" : "none")
+        .attr("stroke-width", (d) => d.external ? 2 : 1)
         .on("click", (event, d) => {
             event.stopPropagation();
             selectNode(d);
@@ -385,7 +413,8 @@ function showTooltip(event, d) {
         tooltip.className = "node-tooltip";
         document.body.appendChild(tooltip);
     }
-    tooltip.innerHTML = `<strong>${d.id}</strong><br>${d.category} &middot; ${formatDownloads(d.downloads)}`;
+    const externalLabel = d.external ? " (external)" : "";
+    tooltip.innerHTML = `<strong>${d.id}</strong>${externalLabel}<br>${d.category} &middot; ${formatDownloads(d.downloads)}`;
     tooltip.style.left = (event.pageX + 12) + "px";
     tooltip.style.top = (event.pageY - 10) + "px";
     tooltip.style.display = "block";

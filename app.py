@@ -2,18 +2,22 @@ import os
 import sys
 import json
 import hashlib
+import logging
+import time
 from pathlib import Path
-from flask import Flask, jsonify, send_from_directory
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from flask import Flask, jsonify, send_from_directory, Response
 
 import requests
 
-app = Flask(__name__, static_folder='static', static_url_path='/static')
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 
 CACHE_DIR = Path(__file__).parent / "cache"
 DATA_DIR = Path(__file__).parent / "data"
 STATIC_DIR = Path(__file__).parent / "static"
 
-PRODUCTION = os.environ.get("FLASK_ENV", "development") == "production"
+PRODUCTION = os.environ.get("APP_ENV", "development") == "production"
 
 if getattr(sys, "frozen", False):
     BASE_DIR = Path(sys._MEIPASS)
@@ -29,108 +33,122 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_SCHEMA_KEYS = {"name", "category", "description", "license", "downloads", "dependencies", "dependents_count", "maintainers", "registry"}
 
+logging.basicConfig(
+    level=logging.INFO if PRODUCTION else logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(str(CACHE_DIR / "app.log")),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
 
-def get_data_path():
-    return BASE_DIR
-
-
-def compute_checksum(filepath):
-    h = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def load_checksums():
-    checksum_file = DATA_DIR / "checksums.json"
-    if checksum_file.exists():
-        with open(checksum_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+logger = logging.getLogger(__name__)
 
 
-def verify_data_integrity():
-    checksums = load_checksums()
-    data_path = DATA_DIR / "packages.json"
-    if not data_path.exists():
-        return False, "packages.json not found"
-    actual = compute_checksum(data_path)
-    expected = checksums.get("packages.json")
-    if expected and actual != expected:
-        return False, f"packages.json checksum mismatch (expected {expected[:12]}..., got {actual[:12]}...)"
-    return True, "OK"
+def _make_request_with_retry(
+    url: str,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 10,
+    max_retries: int = 3,
+) -> requests.Response:
+    """Make an HTTP GET request with exponential backoff retry logic.
 
+    Args:
+        url: The URL to request.
+        headers: Optional headers to include in the request.
+        timeout: Request timeout in seconds.
+        max_retries: Maximum number of retry attempts.
 
-def validate_package_schema(pkg):
-    if not isinstance(pkg, dict):
-        return False
-    missing = REQUIRED_SCHEMA_KEYS - set(pkg.keys())
-    if missing:
-        return False
-    if not isinstance(pkg.get("dependencies"), list):
-        return False
-    if not isinstance(pkg.get("maintainers"), list):
-        return False
-    if not isinstance(pkg.get("downloads"), (int, float)):
-        return False
-    return True
+    Returns:
+        The HTTP response object.
 
-
-def load_packages():
-    data_path = DATA_DIR / "packages.json"
-    try:
-        with open(data_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        app.logger.error("Failed to load packages: %s", e)
-        return {}
-
-    for registry_name, packages in data.items():
-        if not isinstance(packages, list):
-            data[registry_name] = []
-            continue
-        valid = []
-        for pkg in packages:
-            if validate_package_schema(pkg):
-                valid.append(pkg)
-        data[registry_name] = valid
-
-    return data
-
-
-def get_cached_response(cache_key):
-    cache_file = CACHE_DIR / f"{cache_key}.json"
-    if cache_file.exists():
+    Raises:
+        requests.RequestException: If all retry attempts fail.
+    """
+    last_exception: Optional[Exception] = None
+    for attempt in range(max_retries):
         try:
-            with open(cache_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            return None
-    return None
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 429:
+                wait_time = (2 ** attempt) * 0.5
+                logger.warning("Rate limited (429) on %s, retrying in %.1fs (attempt %d/%d)", url, wait_time, attempt + 1, max_retries)
+                last_exception = Exception(f"Rate limited: 429")
+                if attempt < max_retries - 1:
+                    time.sleep(wait_time)
+                    continue
+                raise last_exception
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            last_exception = exc
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) * 0.5
+                logger.warning("Request to %s failed (attempt %d/%d): %s, retrying in %.1fs", url, attempt + 1, max_retries, exc, wait_time)
+                time.sleep(wait_time)
+            else:
+                logger.error("Request to %s failed after %d attempts: %s", url, max_retries, exc)
+    raise last_exception  # type: ignore[misc]
 
 
-def set_cached_response(cache_key, data):
-    cache_file = CACHE_DIR / f"{cache_key}.json"
-    try:
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except IOError:
-        pass
+@app.after_request
+def add_cors_headers(response: Response) -> Response:
+    """Add CORS headers to all responses.
+
+    Args:
+        response: The Flask response object to modify.
+
+    Returns:
+        The response with CORS headers added.
+    """
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 
 @app.route("/")
-def index():
+def index() -> Response:
+    """Serve the main index.html page.
+
+    Returns:
+        The index.html response.
+    """
     return send_from_directory(str(STATIC_DIR), "index.html")
 
 
 @app.route("/static/<path:path>")
-def serve_static(path):
+def serve_static(path: str) -> Response:
+    """Serve static files from the static directory.
+
+    Args:
+        path: The relative path to the static file.
+
+    Returns:
+        The static file response.
+    """
     return send_from_directory(str(STATIC_DIR), path)
 
 
+@app.route("/data/<path:filename>")
+def serve_data(filename: str) -> Response:
+    """Serve files from the data directory for bundled data fallback.
+
+    Args:
+        filename: The relative path to the data file.
+
+    Returns:
+        The data file response.
+    """
+    return send_from_directory(str(DATA_DIR), filename)
+
+
 @app.route("/api/data")
-def api_data():
+def api_data() -> Response:
+    """Return the bundled package data as JSON.
+
+    Returns:
+        JSON response with package data, or 500 on failure.
+    """
     try:
         data = load_packages()
         return jsonify(data)
@@ -141,21 +159,33 @@ def api_data():
 
 
 @app.route("/api/registries")
-def api_registries():
+def api_registries() -> Response:
+    """Return a sorted list of available registries.
+
+    Returns:
+        JSON response with registry names, or 500 on failure.
+    """
     try:
         data = load_packages()
-        registries = sorted(set(
-            pkg["registry"]
-            for pkgs in data.values()
-            for pkg in pkgs
-        ))
+        registries = sorted(
+            set(
+                pkg["registry"]
+                for pkgs in data.values()
+                for pkg in pkgs
+            )
+        )
         return jsonify(registries)
     except Exception:
         return jsonify([]), 500
 
 
 @app.route("/api/stats")
-def api_stats():
+def api_stats() -> Response:
+    """Return aggregate statistics about the package data.
+
+    Returns:
+        JSON response with total packages, downloads, registries, and categories.
+    """
     try:
         data = load_packages()
         total_packages = sum(len(pkgs) for pkgs in data.values())
@@ -164,28 +194,42 @@ def api_stats():
             for pkgs in data.values()
             for pkg in pkgs
         )
-        registries = sorted(set(
-            pkg["registry"]
-            for pkgs in data.values()
-            for pkg in pkgs
-        ))
-        categories = sorted(set(
-            pkg["category"]
-            for pkgs in data.values()
-            for pkg in pkgs
-        ))
-        return jsonify({
-            "total_packages": total_packages,
-            "total_downloads": total_downloads,
-            "registries": registries,
-            "categories": categories,
-        })
+        registries = sorted(
+            set(
+                pkg["registry"]
+                for pkgs in data.values()
+                for pkg in pkgs
+            )
+        )
+        categories = sorted(
+            set(
+                pkg["category"]
+                for pkgs in data.values()
+                for pkg in pkgs
+            )
+        )
+        return jsonify(
+            {
+                "total_packages": total_packages,
+                "total_downloads": total_downloads,
+                "registries": registries,
+                "categories": categories,
+            }
+        )
     except Exception:
         return jsonify({}), 500
 
 
 @app.route("/api/fetch/npm/<path:package>")
-def fetch_npm(package):
+def fetch_npm(package: str) -> Response:
+    """Fetch package metadata from the npm registry with caching and retry.
+
+    Args:
+        package: The npm package name.
+
+    Returns:
+        JSON response with package metadata, or 404 if not found.
+    """
     cache_key = f"npm_{package}"
     cached = get_cached_response(cache_key)
     if cached is not None:
@@ -193,8 +237,10 @@ def fetch_npm(package):
 
     try:
         url = f"https://registry.npmjs.org/{package}"
-        resp = requests.get(url, headers={"User-Agent": "PackageEcosystemVisualizer"}, timeout=10)
-        resp.raise_for_status()
+        resp = _make_request_with_retry(
+            url,
+            headers={"User-Agent": "PackageEcosystemVisualizer"},
+        )
         npm_data = resp.json()
         result = {
             "name": npm_data.get("name", package),
@@ -216,7 +262,15 @@ def fetch_npm(package):
 
 
 @app.route("/api/fetch/pypi/<path:package>")
-def fetch_pypi(package):
+def fetch_pypi(package: str) -> Response:
+    """Fetch package metadata from PyPI with caching and retry.
+
+    Args:
+        package: The PyPI package name.
+
+    Returns:
+        JSON response with package metadata, or 404 if not found.
+    """
     cache_key = f"pypi_{package}"
     cached = get_cached_response(cache_key)
     if cached is not None:
@@ -224,8 +278,10 @@ def fetch_pypi(package):
 
     try:
         url = f"https://pypi.org/pypi/{package}/json"
-        resp = requests.get(url, headers={"User-Agent": "PackageEcosystemVisualizer"}, timeout=10)
-        resp.raise_for_status()
+        resp = _make_request_with_retry(
+            url,
+            headers={"User-Agent": "PackageEcosystemVisualizer"},
+        )
         pypi_data = resp.json()
         info = pypi_data.get("info", {})
         result = {
@@ -248,7 +304,15 @@ def fetch_pypi(package):
 
 
 @app.route("/api/fetch/crates/<path:package>")
-def fetch_crates(package):
+def fetch_crates(package: str) -> Response:
+    """Fetch package metadata from crates.io with caching and retry.
+
+    Args:
+        package: The crates.io package name.
+
+    Returns:
+        JSON response with package metadata, or 404 if not found.
+    """
     cache_key = f"crates_{package}"
     cached = get_cached_response(cache_key)
     if cached is not None:
@@ -256,8 +320,10 @@ def fetch_crates(package):
 
     try:
         url = f"https://crates.io/api/v1/crates/{package}"
-        resp = requests.get(url, headers={"User-Agent": "PackageEcosystemVisualizer"}, timeout=10)
-        resp.raise_for_status()
+        resp = _make_request_with_retry(
+            url,
+            headers={"User-Agent": "PackageEcosystemVisualizer"},
+        )
         crates_data = resp.json()
         crate = crates_data.get("crate", {})
         result = {
@@ -279,7 +345,145 @@ def fetch_crates(package):
         return jsonify({"error": "Package not found and no cached data available"}), 404
 
 
-def _extract_npm_license(npm_data):
+def load_packages() -> Dict[str, List[Dict[str, Any]]]:
+    """Load and validate package data from the bundled JSON file.
+
+    Returns:
+        A dictionary mapping registry names to lists of package dicts.
+    """
+    data_path = DATA_DIR / "packages.json"
+    try:
+        with open(data_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error("Failed to load packages: %s", e)
+        return {}
+
+    for registry_name, packages in data.items():
+        if not isinstance(packages, list):
+            data[registry_name] = []
+            continue
+        valid = []
+        for pkg in packages:
+            if validate_package_schema(pkg):
+                valid.append(pkg)
+        data[registry_name] = valid
+
+    return data
+
+
+def compute_checksum(filepath: Union[str, Path]) -> str:
+    """Compute the SHA-256 checksum of a file.
+
+    Args:
+        filepath: Path to the file to checksum.
+
+    Returns:
+        The hex-encoded SHA-256 digest.
+    """
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_checksums() -> Dict[str, str]:
+    """Load the checksums manifest from disk.
+
+    Returns:
+        A dictionary mapping filenames to their expected SHA-256 checksums.
+    """
+    checksum_file = DATA_DIR / "checksums.json"
+    if checksum_file.exists():
+        with open(checksum_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def verify_data_integrity() -> Tuple[bool, str]:
+    """Verify the integrity of the bundled data file against its checksum.
+
+    Returns:
+        A tuple of (is_valid, message).
+    """
+    checksums = load_checksums()
+    data_path = DATA_DIR / "packages.json"
+    if not data_path.exists():
+        return False, "packages.json not found"
+    actual = compute_checksum(data_path)
+    expected = checksums.get("packages.json")
+    if expected and actual != expected:
+        return False, f"packages.json checksum mismatch (expected {expected[:12]}..., got {actual[:12]}...)"
+    return True, "OK"
+
+
+def validate_package_schema(pkg: Any) -> bool:
+    """Validate that a package dict conforms to the required schema.
+
+    Args:
+        pkg: The package data to validate.
+
+    Returns:
+        True if the package is valid, False otherwise.
+    """
+    if not isinstance(pkg, dict):
+        return False
+    missing = REQUIRED_SCHEMA_KEYS - set(pkg.keys())
+    if missing:
+        return False
+    if not isinstance(pkg.get("dependencies"), list):
+        return False
+    if not isinstance(pkg.get("maintainers"), list):
+        return False
+    if not isinstance(pkg.get("downloads"), (int, float)):
+        return False
+    return True
+
+
+def get_cached_response(cache_key: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a cached API response from disk.
+
+    Args:
+        cache_key: The cache key identifying the response.
+
+    Returns:
+        The cached data dict, or None if not found or invalid.
+    """
+    cache_file = CACHE_DIR / f"{cache_key}.json"
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return None
+    return None
+
+
+def set_cached_response(cache_key: str, data: Dict[str, Any]) -> None:
+    """Persist an API response to the cache directory.
+
+    Args:
+        cache_key: The cache key to store under.
+        data: The response data to cache.
+    """
+    cache_file = CACHE_DIR / f"{cache_key}.json"
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except IOError:
+        pass
+
+
+def _extract_npm_license(npm_data: Dict[str, Any]) -> str:
+    """Extract the license string from npm registry metadata.
+
+    Args:
+        npm_data: The raw npm registry response.
+
+    Returns:
+        The license identifier string.
+    """
     license_field = npm_data.get("license")
     if isinstance(license_field, dict):
         return license_field.get("type", "")
@@ -288,7 +492,15 @@ def _extract_npm_license(npm_data):
     return ""
 
 
-def _extract_npm_repo(npm_data):
+def _extract_npm_repo(npm_data: Dict[str, Any]) -> str:
+    """Extract the repository URL from npm registry metadata.
+
+    Args:
+        npm_data: The raw npm registry response.
+
+    Returns:
+        The repository URL string.
+    """
     repo = npm_data.get("repository")
     if isinstance(repo, dict):
         return repo.get("url", "")
@@ -297,7 +509,15 @@ def _extract_npm_repo(npm_data):
     return ""
 
 
-def _extract_pypi_repo(info):
+def _extract_pypi_repo(info: Dict[str, Any]) -> str:
+    """Extract the repository URL from PyPI package metadata.
+
+    Args:
+        info: The PyPI info dict.
+
+    Returns:
+        The repository URL string.
+    """
     project_urls = info.get("project_urls", {})
     if isinstance(project_urls, dict):
         for key, url in project_urls.items():
@@ -307,12 +527,28 @@ def _extract_pypi_repo(info):
 
 
 @app.errorhandler(404)
-def not_found(e):
+def not_found(e: Exception) -> Response:
+    """Handle 404 errors with a JSON response.
+
+    Args:
+        e: The exception that triggered the error handler.
+
+    Returns:
+        A JSON 404 response.
+    """
     return jsonify({"error": "Not found"}), 404
 
 
 @app.errorhandler(500)
-def internal_error(e):
+def internal_error(e: Exception) -> Response:
+    """Handle 500 errors with a JSON response.
+
+    Args:
+        e: The exception that triggered the error handler.
+
+    Returns:
+        A JSON 500 response.
+    """
     if PRODUCTION:
         return jsonify({"error": "Internal server error"}), 500
     return jsonify({"error": str(e)}), 500
@@ -321,7 +557,7 @@ def internal_error(e):
 if __name__ == "__main__":
     integrity_ok, integrity_msg = verify_data_integrity()
     if not integrity_ok:
-        print(f"WARNING: Data integrity check failed: {integrity_msg}")
+        logger.warning("Data integrity check failed: %s", integrity_msg)
     else:
-        print("Data integrity check passed.")
+        logger.info("Data integrity check passed.")
     app.run(host="0.0.0.0", port=5000, debug=not PRODUCTION)

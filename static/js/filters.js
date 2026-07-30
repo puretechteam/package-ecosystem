@@ -23,6 +23,7 @@ function populateFilters() {
         const labels = ['All', '1M+', '5M+', '10M+', '20M+', '50M+'];
         const idx = parseInt(timeSlider.value);
         document.getElementById('time-label').textContent = labels[idx] || 'All';
+        handleTimeSlider(timeSlider.value);
     });
 
     registrySelect.addEventListener('change', () => {

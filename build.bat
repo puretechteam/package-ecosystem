@@ -11,7 +11,6 @@ pyinstaller --noconfirm ^
     --name "package-ecosystem-%VERSION%" ^
     --add-data "data;data" ^
     --add-data "static;static" ^
-    --add-data "cache;cache" ^
     --distpath=dist ^
     --workpath=build ^
     app.py
