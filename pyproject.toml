@@ -22,7 +22,7 @@ dev = [
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "FBT", "B", "A", "C4", "SIM", "I", "UP", "BLE", "RUF", "PLW", "S110"]
-ignore = ["I001", "UP035", "UP006", "UP045", "UP024", "UP007", "BLE001", "C401", "F401", "F541", "PLW1508", "RUF059", "SIM103", "S110"]
+ignore = ["I001", "UP035", "UP006", "UP045", "UP024", "UP007", "BLE001", "C401", "F401", "F541", "PLW1508", "RUF059", "SIM103", "S110", "E501", "UP015", "W292"]
 
 [tool.black]
 line-length = 88
